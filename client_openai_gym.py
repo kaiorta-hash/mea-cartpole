@@ -34,6 +34,9 @@ def main():
         
         # generating stimulation pattern, stimulating neurons
         mcs_device_interface.stimulate_neurons(pole_angle, pole_angular_velocity, reward, client_socket)
+
+    if terminated:
+        break
     
     # close connection
     client_socket.close()
