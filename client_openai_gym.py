@@ -33,7 +33,10 @@ def main():
         pole_angle, pole_angular_velocity, reward, terminated = openai_gym_api.run_single_frame(client_socket)
         
         # generating stimulation pattern, stimulating neurons
-        mcs_device_interface.stimulate_neurons(pole_angle, pole_angular_velocity, client_socket)
+        mcs_device_interface.stimulate_neurons(pole_angle, pole_angular_velocity, reward, client_socket)
+
+    if terminated:
+        break
     
     # close connection
     client_socket.close()
