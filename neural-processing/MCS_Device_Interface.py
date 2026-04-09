@@ -107,7 +107,7 @@ class MCS_Device_Interface:
         Split channels into left and right groups.
         """
 
-        median_abs_deviations, abs_activity = MADs(
+        median_abs_deviations, abs_activity, _, _ = MADs(
             np.linspace(0, 1, raw_neural_data.shape[-1]), raw_neural_data
         )
         spike_count = count_spikes(abs_activity, median_abs_deviations)

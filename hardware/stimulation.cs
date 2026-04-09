@@ -13,55 +13,71 @@ using Mcs.Usb;
 
 namespace Stimulation
 {
-    public class StimulatorClient
+    public class StimulatorServer
     {
-        // python server IP address and port
-        static string serverIP = "127.0.0.1";
-        static int serverPort = 9090;
+        static int port = 9090;
+        const int WaveformBytes = 4000; // 500 float64 values
 
         public static void Main(string[] args)
         {
-            TcpClient client = new TcpClient();
+            Socket listenerSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+
             try
             {
-                client.Connect(serverIP, serverPort);
-                Console.WriteLine("Connected to server.");
-
-                NetworkStream stream = client.GetStream();
-                byte[] data = new byte[256];
-                int bytes = stream.Read(data, 0, data.Length);
-                string response = Encoding.ASCII.GetString(data, 0, bytes);
-                Console.WriteLine("Received: {0}", response);
-
-                // check the response from the server and call appropriate method
-                if (response == "start")
-                {
-                    Stimulator.start();
-                }
-                else if (response == "stop")
-                {
-                    Stimulator.stop();
-                }
-                else
-                {
-                    Console.WriteLine("Invalid command received from server.");
-                }
-
-                stream.Close();
-                client.Close();
+                listenerSocket.Bind(new IPEndPoint(IPAddress.Loopback, port));
+                listenerSocket.Listen(10);
+                Console.WriteLine($"Stimulator server listening on port {port}...");
+                listenerSocket.BeginAccept(new AsyncCallback(AcceptCallback), listenerSocket);
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                Console.WriteLine("Exception: {0}", e);
+                Console.WriteLine("Exception: " + ex.Message);
             }
+
+            Console.ReadLine();
+        }
+
+        static void AcceptCallback(IAsyncResult ar)
+        {
+            Socket listenerSocket = (Socket)ar.AsyncState;
+            Socket clientSocket = listenerSocket.EndAccept(ar);
+
+            IPEndPoint clientEndPoint = (IPEndPoint)clientSocket.RemoteEndPoint;
+            Console.WriteLine($"Python connected from {clientEndPoint.Address}:{clientEndPoint.Port}");
+
+            // Receive exactly 4000 bytes (500 float64 waveform values)
+            byte[] waveformData = new byte[WaveformBytes];
+            int received = 0;
+            while (received < WaveformBytes)
+            {
+                int n = clientSocket.Receive(waveformData, received, WaveformBytes - received, SocketFlags.None);
+                if (n == 0) break;
+                received += n;
+            }
+
+            if (received == WaveformBytes)
+            {
+                Console.WriteLine($"Received {received} bytes. Firing stimulation pulse.");
+                Stimulator.start(waveformData);
+            }
+            else
+            {
+                Console.WriteLine($"Expected {WaveformBytes} bytes, got {received}. Skipping stimulation.");
+            }
+
+            clientSocket.Shutdown(SocketShutdown.Both);
+            clientSocket.Close();
+
+            // Continue listening for the next connection
+            listenerSocket.BeginAccept(new AsyncCallback(AcceptCallback), listenerSocket);
         }
     }
 
     public class Stimulator
     {
         // set amplitudes (µV) and frequencies (MHz) for stimulation channels
-        int amplitude1 = 10000; 
-        double frequency1 = 0.00001; 
+        int amplitude1 = 10000;
+        double frequency1 = 0.00001;
         int amplitude2 = 10000;
         double frequency2 = 0.00001;
 
@@ -72,7 +88,7 @@ namespace Stimulation
         private int electrode2 = 1;
         private int headStage = 3;
 
-        public static void start()
+        public static void start(byte[] waveformData)
         {
             if (cDeviceList.Count == 0)
             {
@@ -91,8 +107,8 @@ namespace Stimulation
             {
                 stg.SetElectrodeMode((uint)headStage, (uint)i, i == electrode1 || i == electrode2 ? electrodeMode : ElectrodeModeEnumNet.emAutomatic);
                 stg.SetElectrodeEnable((uint)headStage, (uint)i, 0, i == electrode1 || i == electrode2 ? true : false);
-                stg.SetElectrodeDacMux((uint)headStage, (uint)i, 0, 
-                    i == electrode1 ? ElectrodeDacMuxEnumNet.Stg1 : 
+                stg.SetElectrodeDacMux((uint)headStage, (uint)i, 0,
+                    i == electrode1 ? ElectrodeDacMuxEnumNet.Stg1 :
                     ( i == electrode2 ? ElectrodeDacMuxEnumNet.Stg2 : ElectrodeDacMuxEnumNet.Ground));
                 stg.SetEnableAmplifierProtectionSwitch((uint)headStage, (uint)i, true);
                 stg.SetBlankingEnable((uint)headStage, (uint)i, false);
@@ -101,7 +117,7 @@ namespace Stimulation
             // array of amplitudes and durations
             int signalSize = 6;
             int[] amplitudeArr1 = new int[] { amplitude1, -1 * amplitude1, amplitude1, -1 * amplitude1, amplitude1, -1 * amplitude1};
-            int[] amplitudeArr2 = new int[] new int[] { amplitude2, -1 * amplitude2, amplitude2, -1 * amplitude2, amplitude2, -1 * amplitude2};
+            int[] amplitudeArr2 = new int[] { amplitude2, -1 * amplitude2, amplitude2, -1 * amplitude2, amplitude2, -1 * amplitude2};
             int[] sideband1 = new int[] { 1 << 8, 3 << 8, 0, 1 << 8, 3 << 8, 0 }; // user defined sideband (use bits > 8)
             int[] StimulusActive1 = new int[] {1, 1, 0, 1, 1, 0};
             int[] sideband2 = new int[] { 4 << 8, 12 << 8, 0, 4 << 8, 12 << 8, 0 }; // user defined sideband (use bits > 8)

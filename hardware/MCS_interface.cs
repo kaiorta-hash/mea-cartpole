@@ -4,6 +4,8 @@ using System.ComponentModel;
 using System.Data;
 using System.Drawing;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -17,6 +19,12 @@ namespace MEA2100_Recording_and_Stimulation
 
         private CMeaUSBDeviceNet dacq = new CMeaUSBDeviceNet();
 
+        private const int TcpPort = 8080;
+        private const int NumElectrodeChannels = 60;
+        private Socket _listenerSocket;
+        private Socket _clientSocket;
+        private readonly object _socketLock = new object();
+
         public MCS_interface()
         {
             InitializeComponent();
@@ -28,6 +36,27 @@ namespace MEA2100_Recording_and_Stimulation
             dacq.ChannelDataEvent += Dacq_ChannelDataEvent;
 
             RefreshDeviceList();
+            StartTcpServer();
+        }
+
+        private void StartTcpServer()
+        {
+            _listenerSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            _listenerSocket.Bind(new IPEndPoint(IPAddress.Loopback, TcpPort));
+            _listenerSocket.Listen(1);
+            _listenerSocket.BeginAccept(new AsyncCallback(AcceptCallback), null);
+        }
+
+        private void AcceptCallback(IAsyncResult ar)
+        {
+            Socket incoming = _listenerSocket.EndAccept(ar);
+            lock (_socketLock)
+            {
+                _clientSocket?.Close();
+                _clientSocket = incoming;
+            }
+            // Re-arm for next connection
+            _listenerSocket.BeginAccept(new AsyncCallback(AcceptCallback), null);
         }
 
         private void RefreshDeviceList()
@@ -69,6 +98,35 @@ namespace MEA2100_Recording_and_Stimulation
             for (int i = 0; i < channelsInBlock / 2; i++)
             {
                 data.Add(dacq.ChannelBlock.ReadFramesI32(i, 0, threshold, out int frames_ret));
+            }
+
+            // Send electrode channels 0-59 to Python as float64 bytes
+            lock (_socketLock)
+            {
+                if (_clientSocket != null)
+                {
+                    try
+                    {
+                        int numChannels = Math.Min(NumElectrodeChannels, data.Count);
+                        int samplesPerChannel = data[0].Length;
+                        byte[] buffer = new byte[numChannels * samplesPerChannel * 8];
+                        int offset = 0;
+                        for (int i = 0; i < numChannels; i++)
+                        {
+                            for (int j = 0; j < samplesPerChannel; j++)
+                            {
+                                byte[] b = BitConverter.GetBytes((double)data[i][j]);
+                                Array.Copy(b, 0, buffer, offset, 8);
+                                offset += 8;
+                            }
+                        }
+                        _clientSocket.Send(buffer);
+                    }
+                    catch
+                    {
+                        _clientSocket = null;
+                    }
+                }
             }
 
             if (!inHandleData) // skip if last invoke has not finished yet (weak graphic performance)
